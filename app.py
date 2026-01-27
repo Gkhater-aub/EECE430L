@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_marshmallow import Marshmallow
+from flask_bcrypt import Bcrypt
 import os
 
 load_dotenv()
@@ -17,6 +18,7 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 
 app = Flask(__name__)
 ma = Marshmallow(app) 
+bcrypt = Bcrypt(app) 
 
 app.config["SQLALCHEMY_DATABASE_URI"] = (
     f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
@@ -40,6 +42,22 @@ class TransactionSchema(ma.SQLAlchemyAutoSchema):
         model = Transaction
 
 transaction_schema = TransactionSchema()
+
+class User(db.Model):
+    def __init__(self, user_name, password): 
+        super(User, self).__init__(user_name = user_name) 
+        self.hashed_password = bcrypt.generate_password_hash(password)
+    id = db.Column(db.Integer, primary_key=True)
+    user_name = db.Column(db.String(30), unique=True)
+    hashed_password = db.Column(db.String(128))
+
+
+class UserSchema(ma.SQLAlchemyAutoSchema):
+    class Meta:
+        model = User
+        fields = ("id", "user_name") 
+
+user_schema = UserSchema() 
 
 @app.route("/transaction", methods=["POST"])
 @limiter.limit("10 per minute")
@@ -71,6 +89,33 @@ def add_transaction():
     db.session.commit()
 
     return jsonify(transaction_schema.dump(tx)), 201
+
+@app.route("/user", methods=["POST"])
+@limiter.limit("10 per minute")
+def add_user():
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Missing JSON body"}), 400
+
+    user_name = data.get("user_name")
+    password = data.get("password")
+
+    if not isinstance(user_name, str) or not user_name.strip():
+        return jsonify({"error": "Invalid user_name"}), 400
+
+    if not isinstance(password, str) or not password:
+        return jsonify({"error": "Invalid password"}), 400
+
+    user = User(user_name=user_name.strip(), password=password)
+    db.session.add(user)
+
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        return jsonify({"error": "User already exists"}), 409
+
+    return jsonify(user_schema.dump(user)), 201
 
 @app.route("/exchangeRate", methods=["GET"])
 def exchange_rate():
@@ -105,4 +150,6 @@ def exchange_rate():
     })
 
 if __name__ == "__main__":
+    with app.app_context(): 
+        db.create_all()
     app.run(debug=False)
