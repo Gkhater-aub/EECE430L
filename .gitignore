@@ -1,5 +1,5 @@
 venv/
-pycache/
+__pycache__/
 **/.idea/shelf/
 **/.idea/tasks.xml
 **/.idea/workspace.xml
