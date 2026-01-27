@@ -1,3 +1,6 @@
 venv/
-__pycache__/
-.env
+pycache/
+**/.idea/shelf/
+**/.idea/tasks.xml
+**/.idea/workspace.xml
+**/.idea/usage.statistics.xml
