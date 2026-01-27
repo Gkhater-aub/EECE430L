@@ -3,6 +3,7 @@ from flask_sqlalchemy import SQLAlchemy
 from dotenv import load_dotenv
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from flask_marshmallow import Marshmallow
 import os
 
 load_dotenv()
@@ -15,6 +16,7 @@ DB_NAME = os.getenv("DB_NAME")
 SECRET_KEY = os.getenv("SECRET_KEY")
 
 app = Flask(__name__)
+ma = Marshmallow(app) 
 
 app.config["SQLALCHEMY_DATABASE_URI"] = (
     f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
@@ -23,7 +25,7 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db = SQLAlchemy(app)
 
-limiter = Limiter(app, key_func=get_remote_address)
+limiter = Limiter(app = app, key_func=get_remote_address)
 
 class Transaction(db.Model):
     __tablename__ = "transactions"
@@ -31,6 +33,13 @@ class Transaction(db.Model):
     usd_amount = db.Column(db.Float, nullable=False)
     lbp_amount = db.Column(db.Float, nullable=False)
     usd_to_lbp = db.Column(db.Boolean, nullable=False)
+
+class TransactionSchema(ma.SQLAlchemyAutoSchema): 
+    class Meta: 
+        fields = ("id", "usd_amount", "lbp_amount", "usd_to_lbp")
+        model = Transaction
+
+transaction_schema = TransactionSchema()
 
 @app.route("/transaction", methods=["POST"])
 @limiter.limit("10 per minute")
@@ -61,7 +70,7 @@ def add_transaction():
     db.session.add(tx)
     db.session.commit()
 
-    return jsonify({"message": "Transaction created", "id": tx.id}), 201
+    return jsonify(transaction_schema.dump(tx)), 201
 
 @app.route("/exchangeRate", methods=["GET"])
 def exchange_rate():
