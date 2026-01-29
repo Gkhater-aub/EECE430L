@@ -203,11 +203,28 @@ def authenticate():
     token = create_token(user.id) 
     return jsonify({"token": token}), 200
 
-
 @app.route("/exchangeRate", methods=["GET"])
 def exchange_rate():
-    usd_to_lbp_txs = Transaction.query.filter_by(usd_to_lbp=True).all()
-    lbp_to_usd_txs = Transaction.query.filter_by(usd_to_lbp=False).all()
+    end_date = datetime.datetime.now()
+    start_date = end_date - datetime.timedelta(hours=72)
+
+    usd_to_lbp_txs = (
+        Transaction.query
+        .filter(
+            Transaction.added_date.between(start_date, end_date),
+            Transaction.usd_to_lbp == True
+        )
+        .all()
+    )
+
+    lbp_to_usd_txs = (
+        Transaction.query
+        .filter(
+            Transaction.added_date.between(start_date, end_date),
+            Transaction.usd_to_lbp == False
+        )
+        .all()
+    )
 
     usd_to_lbp_rates = [
         tx.lbp_amount / tx.usd_amount
@@ -221,15 +238,8 @@ def exchange_rate():
         if tx.lbp_amount != 0
     ]
 
-    if len(usd_to_lbp_rates) > 0:
-        avg_usd_to_lbp = sum(usd_to_lbp_rates) / len(usd_to_lbp_rates)
-    else:
-        avg_usd_to_lbp = None
-
-    if len(lbp_to_usd_rates) > 0:
-        avg_lbp_to_usd = sum(lbp_to_usd_rates) / len(lbp_to_usd_rates)
-    else:
-        avg_lbp_to_usd = None
+    avg_usd_to_lbp = (sum(usd_to_lbp_rates) / len(usd_to_lbp_rates)) if usd_to_lbp_rates else None
+    avg_lbp_to_usd = (sum(lbp_to_usd_rates) / len(lbp_to_usd_rates)) if lbp_to_usd_rates else None
 
     return jsonify({
         "usd_to_lbp": avg_usd_to_lbp,
