@@ -4,10 +4,11 @@ from dotenv import load_dotenv
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_marshmallow import Marshmallow
+from marshmallow import fields 
 from flask_bcrypt import Bcrypt
 from flask import abort
+import jwt
 import os
-import jwt 
 import datetime 
 
 load_dotenv()
@@ -18,6 +19,7 @@ DB_HOST = os.getenv("DB_HOST")
 DB_PORT = os.getenv("DB_PORT")
 DB_NAME = os.getenv("DB_NAME")
 SECRET_KEY = os.getenv("SECRET_KEY")
+print("SECRET_KEY set?", bool(SECRET_KEY))
 
 app = Flask(__name__)
 ma = Marshmallow(app) 
@@ -33,18 +35,27 @@ db = SQLAlchemy(app)
 limiter = Limiter(app = app, key_func=get_remote_address)
 
 class Transaction(db.Model):
+    def __init__(self, usd_amount, lbp_amount, usd_to_lbp, user_id):
+        super(Transaction, self).__init__(usd_amount=usd_amount, lbp_amount=lbp_amount, usd_to_lbp=usd_to_lbp, 
+            user_id = user_id, added_date = datetime.datetime.now())
     __tablename__ = "transactions"
     id = db.Column(db.Integer, primary_key=True)
     usd_amount = db.Column(db.Float, nullable=False)
     lbp_amount = db.Column(db.Float, nullable=False)
     usd_to_lbp = db.Column(db.Boolean, nullable=False)
+    added_date = db.Column(db.DateTime, nullable  =False) 
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable = True)
 
-class TransactionSchema(ma.SQLAlchemyAutoSchema): 
-    class Meta: 
-        fields = ("id", "usd_amount", "lbp_amount", "usd_to_lbp")
-        model = Transaction
+class TransactionSchema(ma.Schema):
+    id = fields.Int()
+    usd_amount = fields.Float()
+    lbp_amount = fields.Float()
+    usd_to_lbp = fields.Bool()
+    user_id = fields.Int(allow_none=True)
+    added_date = fields.DateTime()
 
 transaction_schema = TransactionSchema()
+transaction_list_schema = TransactionSchema(many=True)
 
 class User(db.Model):
     def __init__(self, user_name, password): 
@@ -54,17 +65,29 @@ class User(db.Model):
     user_name = db.Column(db.String(30), unique=True)
     hashed_password = db.Column(db.String(128))
 
-
-class UserSchema(ma.SQLAlchemyAutoSchema):
-    class Meta:
-        model = User
-        fields = ("id", "user_name") 
+class UserSchema(ma.Schema):
+    id = fields.Int()
+    user_name = fields.Str()
 
 user_schema = UserSchema() 
+
+def extract_auth_token(authenticated_request):
+    auth_header = authenticated_request.headers.get('Authorization')
+    if auth_header:
+        token = auth_header.split(" ")[1]
+        return token.strip()
+    else:
+        return None
+
+def decode_token(token):
+    payload = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])
+    print("decoded payload: ", payload)
+    return int(payload['sub'])
 
 @app.route("/transaction", methods=["POST"])
 @limiter.limit("10 per minute")
 def add_transaction():
+
     data = request.get_json()
     if not data:
         return jsonify({"error": "Missing JSON body"}), 400
@@ -86,12 +109,39 @@ def add_transaction():
     usd_to_lbp = data.get("usd_to_lbp")
     if type(usd_to_lbp) is not bool:
         return jsonify({"error": "Invalid usd_to_lbp"}), 400
+    token = extract_auth_token(request)
+    if token is None: 
+        tx = Transaction(usd_amount=usd_amount, lbp_amount=lbp_amount, usd_to_lbp=usd_to_lbp, user_id=None)
+    else: 
+        try: 
+            user_id = decode_token(token) 
+            
+        except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+            abort(403) 
+        tx = Transaction(usd_amount=usd_amount, lbp_amount=lbp_amount, usd_to_lbp=usd_to_lbp, user_id=user_id)
 
-    tx = Transaction(usd_amount=usd_amount, lbp_amount=lbp_amount, usd_to_lbp=usd_to_lbp)
     db.session.add(tx)
     db.session.commit()
 
     return jsonify(transaction_schema.dump(tx)), 201
+
+@app.route("/transaction", methods=["GET"])
+@limiter.limit("10 per minute")
+def get_transactions():
+    token = extract_auth_token(request)
+    print("extracted token:", token)
+    if token is None:
+        abort(403)
+
+    try:
+        user_id = decode_token(token)
+        print("decoded user id:", user_id)
+    except Exception as e:
+        print("DECODE FAILED:", type(e), e)
+        abort(403)
+
+    txs = Transaction.query.filter_by(user_id=user_id).all()
+    return jsonify(transaction_list_schema.dump(txs)), 200
 
 @app.route("/user", methods=["POST"])
 @limiter.limit("10 per minute")
@@ -124,7 +174,7 @@ def create_token(user_id):
     payload = {
         "exp": datetime.datetime.utcnow() + datetime.timedelta(days=4),
         "iat": datetime.datetime.utcnow(),
-        "sub": user_id
+        "sub": str(user_id)
     }
     token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
     if isinstance(token, bytes):
@@ -152,7 +202,7 @@ def authenticate():
         abort(403)
     
     token = create_token(user.id) 
-    return jsonify({"message": "Authenticated successfully"}), 200
+    return jsonify({"token": token}), 200
 
 
 @app.route("/exchangeRate", methods=["GET"])
