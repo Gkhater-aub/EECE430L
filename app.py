@@ -1,75 +1,29 @@
-from flask import Flask, request, jsonify
-from flask_sqlalchemy import SQLAlchemy
-from dotenv import load_dotenv
+from flask import Flask, request, jsonify, abort
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-from flask_marshmallow import Marshmallow
-from marshmallow import fields 
-from flask_bcrypt import Bcrypt
-from flask import abort
+from dotenv import load_dotenv
+from db_config import DB_CONFIG
+from extensions import db, ma, bcrypt
 import jwt
 import os
-import datetime 
+import datetime
 
 load_dotenv()
 
-DB_USER = os.getenv("DB_USER")
-DB_PASSWORD = os.getenv("DB_PASSWORD")
-DB_HOST = os.getenv("DB_HOST")
-DB_PORT = os.getenv("DB_PORT")
-DB_NAME = os.getenv("DB_NAME")
-SECRET_KEY = os.getenv("SECRET_KEY")
-print("SECRET_KEY set?", bool(SECRET_KEY))
+SECRET_KEY = os.getenv("SECRET_KEY")  
 
 app = Flask(__name__)
-ma = Marshmallow(app) 
-bcrypt = Bcrypt(app) 
 
-app.config["SQLALCHEMY_DATABASE_URI"] = (
-    f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-)
+app.config["SQLALCHEMY_DATABASE_URI"] = DB_CONFIG
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-db = SQLAlchemy(app)
+limiter = Limiter(app=app, key_func=get_remote_address)
+db.init_app(app)
+ma.init_app(app)
+bcrypt.init_app(app)
 
-limiter = Limiter(app = app, key_func=get_remote_address)
-
-class Transaction(db.Model):
-    def __init__(self, usd_amount, lbp_amount, usd_to_lbp, user_id):
-        super(Transaction, self).__init__(usd_amount=usd_amount, lbp_amount=lbp_amount, usd_to_lbp=usd_to_lbp, 
-            user_id = user_id, added_date = datetime.datetime.now())
-    __tablename__ = "transactions"
-    id = db.Column(db.Integer, primary_key=True)
-    usd_amount = db.Column(db.Float, nullable=False)
-    lbp_amount = db.Column(db.Float, nullable=False)
-    usd_to_lbp = db.Column(db.Boolean, nullable=False)
-    added_date = db.Column(db.DateTime, nullable  =False) 
-    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable = True)
-
-class TransactionSchema(ma.Schema):
-    id = fields.Int()
-    usd_amount = fields.Float()
-    lbp_amount = fields.Float()
-    usd_to_lbp = fields.Bool()
-    user_id = fields.Int(allow_none=True)
-    added_date = fields.DateTime()
-
-transaction_schema = TransactionSchema()
-transaction_list_schema = TransactionSchema(many=True)
-
-class User(db.Model):
-    def __init__(self, user_name, password): 
-        super(User, self).__init__(user_name = user_name) 
-        self.hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
-    id = db.Column(db.Integer, primary_key=True)
-    user_name = db.Column(db.String(30), unique=True)
-    hashed_password = db.Column(db.String(128))
-
-class UserSchema(ma.Schema):
-    id = fields.Int()
-    user_name = fields.Str()
-
-user_schema = UserSchema() 
+from model.user import User, user_schema
+from model.transaction import Transaction, transaction_schema, transaction_list_schema
 
 def extract_auth_token(authenticated_request):
     auth_header = authenticated_request.headers.get('Authorization')
@@ -81,7 +35,6 @@ def extract_auth_token(authenticated_request):
 
 def decode_token(token):
     payload = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])
-    print("decoded payload: ", payload)
     return int(payload['sub'])
 
 @app.route("/transaction", methods=["POST"])
@@ -129,13 +82,11 @@ def add_transaction():
 @limiter.limit("10 per minute")
 def get_transactions():
     token = extract_auth_token(request)
-    print("extracted token:", token)
     if token is None:
         abort(403)
 
     try:
         user_id = decode_token(token)
-        print("decoded user id:", user_id)
     except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
         abort(403)
 
