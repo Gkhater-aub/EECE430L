@@ -136,8 +136,7 @@ def get_transactions():
     try:
         user_id = decode_token(token)
         print("decoded user id:", user_id)
-    except Exception as e:
-        print("DECODE FAILED:", type(e), e)
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
         abort(403)
 
     txs = Transaction.query.filter_by(user_id=user_id).all()
