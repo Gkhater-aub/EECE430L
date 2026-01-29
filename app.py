@@ -5,7 +5,10 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_marshmallow import Marshmallow
 from flask_bcrypt import Bcrypt
+from flask import abort
 import os
+import jwt 
+import datetime 
 
 load_dotenv()
 
@@ -46,7 +49,7 @@ transaction_schema = TransactionSchema()
 class User(db.Model):
     def __init__(self, user_name, password): 
         super(User, self).__init__(user_name = user_name) 
-        self.hashed_password = bcrypt.generate_password_hash(password)
+        self.hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
     id = db.Column(db.Integer, primary_key=True)
     user_name = db.Column(db.String(30), unique=True)
     hashed_password = db.Column(db.String(128))
@@ -116,6 +119,41 @@ def add_user():
         return jsonify({"error": "User already exists"}), 409
 
     return jsonify(user_schema.dump(user)), 201
+
+def create_token(user_id):
+    payload = {
+        "exp": datetime.datetime.utcnow() + datetime.timedelta(days=4),
+        "iat": datetime.datetime.utcnow(),
+        "sub": user_id
+    }
+    token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+    if isinstance(token, bytes):
+        token = token.decode("utf-8")
+    return token
+
+@app.route("/authentication", methods=["POST"])
+@limiter.limit("10 per minute")
+def authenticate():
+    data = request.get_json()
+    if not data:
+        abort(400)
+
+    user_name = data.get("user_name")
+    password = data.get("password")
+
+    if user_name is None or password is None:
+        abort(400)
+
+    user = User.query.filter_by(user_name=user_name).first()
+    if user is None:
+        abort(403)
+
+    if not bcrypt.check_password_hash(user.hashed_password, password):
+        abort(403)
+    
+    token = create_token(user.id) 
+    return jsonify({"message": "Authenticated successfully"}), 200
+
 
 @app.route("/exchangeRate", methods=["GET"])
 def exchange_rate():
